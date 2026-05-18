@@ -71,5 +71,23 @@ for (const sql of stmts) {
   await db.execute(sql);
 }
 
+// Add interval column to price_history if not yet present
+try {
+  await db.execute(`ALTER TABLE price_history ADD COLUMN interval TEXT NOT NULL DEFAULT '1d'`);
+  console.log('Added interval column to price_history');
+  // Tag existing rows that look like hourly data (non-midnight UTC timestamps)
+  await db.execute(
+    `UPDATE price_history SET interval = '1h' WHERE strftime('%H', ts) != '00' AND interval = '1d'`
+  );
+} catch (e) {
+  // Column already exists — ignore
+  if (!e.message?.includes('duplicate column')) console.warn('[migrate]', e.message);
+}
+
+// Index for interval-filtered queries
+await db.execute(
+  `CREATE INDEX IF NOT EXISTS idx_price_stock_interval_ts ON price_history(stock_id, interval, ts DESC)`
+);
+
 console.log('Migration complete.');
 process.exit(0);

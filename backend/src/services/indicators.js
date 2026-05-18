@@ -1,5 +1,44 @@
 import { RSI, MACD, BollingerBands, SMA, EMA } from 'technicalindicators';
 
+// ── Series helpers (return full array aligned to bars) ──────────────────────
+function align(bars, values) {
+  const offset = bars.length - values.length;
+  return values.map((v, i) => ({ time: bars[offset + i].time, ...v }));
+}
+
+export function seriesRSI(bars, period = 14) {
+  const vals = RSI.calculate({ values: bars.map((b) => b.close), period });
+  return align(bars, vals.map((v) => ({ value: v })));
+}
+
+export function seriesMACD(bars, fast = 12, slow = 26, signal = 9) {
+  const vals = MACD.calculate({
+    values: bars.map((b) => b.close),
+    fastPeriod: fast, slowPeriod: slow, signalPeriod: signal,
+    SimpleMAOscillator: false, SimpleMASignal: false,
+  });
+  return align(bars, vals.map((v) => ({
+    macd:      v.MACD      ?? 0,
+    signal:    v.signal    ?? 0,
+    histogram: v.histogram ?? 0,
+  })));
+}
+
+export function seriesBB(bars, period = 20, stdDev = 2) {
+  const vals = BollingerBands.calculate({ values: bars.map((b) => b.close), period, stdDev });
+  return align(bars, vals.map((v) => ({ upper: v.upper, middle: v.middle, lower: v.lower })));
+}
+
+export function seriesSMA(bars, period = 20) {
+  const vals = SMA.calculate({ values: bars.map((b) => b.close), period });
+  return align(bars, vals.map((v) => ({ value: v })));
+}
+
+export function seriesEMA(bars, period = 20) {
+  const vals = EMA.calculate({ values: bars.map((b) => b.close), period });
+  return align(bars, vals.map((v) => ({ value: v })));
+}
+
 export function computeRSI(closes, period = 14) {
   const result = RSI.calculate({ values: closes, period });
   return result.length ? result[result.length - 1] : null;

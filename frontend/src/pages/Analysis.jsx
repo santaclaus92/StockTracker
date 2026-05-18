@@ -107,6 +107,17 @@ export default function Analysis() {
   const [interval, setInterval] = useState('1h');
   const [days,     setDays]     = useState(90);
   const [queried,  setQueried]  = useState(null);
+  const reloadTimerRef = useRef(null);
+
+  // Auto-reload when interval or days change (if a symbol is already loaded)
+  useEffect(() => {
+    if (!queried) return;
+    clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      setQueried((prev) => prev ? { ...prev, interval, days } : null);
+    }, 400);
+    return () => clearTimeout(reloadTimerRef.current);
+  }, [interval, days]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Pane heights (resizable)
   const [paneH, setPaneH] = useState({ main: 400, rsi: 100, macd: 120 });
@@ -130,11 +141,14 @@ export default function Analysis() {
   };
 
   const pickSuggestion = useCallback((s) => {
-    setInput(s.symbol);
+    const sym = s.symbol.toUpperCase();
+    setInput(sym);
     setSuggestions([]);
     setShowDrop(false);
     setActiveIdx(-1);
-  }, []);
+    // Load chart immediately when a counter is selected
+    setQueried((prev) => ({ symbol: sym, interval: prev?.interval ?? interval, days: prev?.days ?? days }));
+  }, [interval, days]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e) => {
     if (!showDrop || !suggestions.length) {
@@ -368,8 +382,14 @@ export default function Analysis() {
         {/* Interval */}
         <div>
           <label className="text-xs text-gray-500 block mb-1">Interval</label>
-          <select value={interval} onChange={(e) => setInterval(e.target.value)}
+          <select value={interval} onChange={(e) => {
+              const v = e.target.value;
+              setInterval(v);
+              if (v === '15m') setDays((d) => Math.min(d, 55));
+              if (v === '1h')  setDays((d) => Math.min(d, 730));
+            }}
             className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <option value="15m">15 Minutes</option>
             <option value="1h">1 Hour</option>
             <option value="1d">1 Day</option>
           </select>
@@ -383,17 +403,23 @@ export default function Analysis() {
               {days >= 365 ? `${(days / 365).toFixed(days % 365 === 0 ? 0 : 1)}y` : `${days}d`}
             </span>
             <span className="text-gray-600 ml-1">
-              ({interval === '1h' ? `≈${Math.round(days * 8).toLocaleString()} bars` : `≈${days} bars`})
+              ({interval === '15m' ? `≈${Math.round(days * 32).toLocaleString()} bars`
+               : interval === '1h' ? `≈${Math.round(days * 8).toLocaleString()} bars`
+               : `≈${days} bars`})
             </span>
           </label>
           <input
-            type="range" min={7} max={interval === '1h' ? 730 : 1825} step={1} value={days}
+            type="range" min={7}
+            max={interval === '15m' ? 55 : interval === '1h' ? 730 : 1825}
+            step={1} value={days}
             onChange={(e) => setDays(Number(e.target.value))}
             className="w-full accent-blue-500 cursor-pointer"
           />
           <div className="flex justify-between text-[10px] text-gray-600 select-none">
             <span>7d</span>
-            {interval === '1h'
+            {interval === '15m'
+              ? <><span>2w</span><span>1m</span><span>6w</span><span>55d</span></>
+              : interval === '1h'
               ? <><span>3m</span><span>6m</span><span>1y</span><span>2y</span></>
               : <><span>6m</span><span>1y</span><span>2y</span><span>5y</span></>}
           </div>
