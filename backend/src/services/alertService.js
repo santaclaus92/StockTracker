@@ -28,34 +28,37 @@ async function sendTelegram(text) {
   await tgBot.sendMessage(TELEGRAM.chatId, text);
 }
 
-const logAlert = db.prepare(`
-  INSERT INTO alerts_log (condition_id, stock_id, message, price_at)
-  VALUES (@condition_id, @stock_id, @message, @price_at)
-`);
-
 export async function evaluateAllConditions() {
-  const favs = db.prepare(`
-    SELECT s.id, s.symbol, s.name,
-           lp.price, lp.pct_change, lp.week52_high, lp.week52_low
-    FROM stocks s
-    JOIN favourites f ON f.stock_id = s.id
-    LEFT JOIN latest_price lp ON lp.stock_id = s.id
-    WHERE lp.price IS NOT NULL
-  `).all();
+  const { rows: favs } = await db.execute({
+    sql: `
+      SELECT s.id, s.symbol, s.name,
+             lp.price, lp.pct_change, lp.week52_high, lp.week52_low
+      FROM stocks s
+      JOIN favourites f ON f.stock_id = s.id
+      LEFT JOIN latest_price lp ON lp.stock_id = s.id
+      WHERE lp.price IS NOT NULL
+    `,
+    args: [],
+  });
 
   for (const stock of favs) {
-    const conditions = db.prepare(
-      'SELECT * FROM conditions WHERE stock_id = ? AND active = 1'
-    ).all(stock.id);
+    const { rows: conditions } = await db.execute({
+      sql: 'SELECT * FROM conditions WHERE stock_id = ? AND active = 1',
+      args: [stock.id],
+    });
 
     if (!conditions.length) continue;
 
     // Pull closes for indicator calculations (last 60 bars)
-    const closes = db.prepare(`
-      SELECT close FROM price_history
-      WHERE stock_id = ? AND close IS NOT NULL
-      ORDER BY ts DESC LIMIT 60
-    `).all(stock.id).map((r) => r.close).reverse();
+    const { rows: closeRows } = await db.execute({
+      sql: `
+        SELECT close FROM price_history
+        WHERE stock_id = ? AND close IS NOT NULL
+        ORDER BY ts DESC LIMIT 60
+      `,
+      args: [stock.id],
+    });
+    const closes = closeRows.map((r) => r.close).reverse();
 
     for (const cond of conditions) {
       const { triggered, message } = evaluateCondition(cond, stock, closes);
@@ -63,11 +66,9 @@ export async function evaluateAllConditions() {
 
       const msg = `[${stock.symbol}] ${stock.name}: ${message}`;
 
-      logAlert.run({
-        condition_id: cond.id,
-        stock_id:     stock.id,
-        message:      msg,
-        price_at:     stock.price,
+      await db.execute({
+        sql: 'INSERT INTO alerts_log (condition_id, stock_id, message, price_at) VALUES (?, ?, ?, ?)',
+        args: [cond.id, stock.id, msg, stock.price],
       });
 
       if (cond.channel === 'email' || cond.channel === 'both') {

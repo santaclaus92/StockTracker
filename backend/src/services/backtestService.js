@@ -42,13 +42,16 @@ function applyLogic(results, logic) {
     : results.every(Boolean);
 }
 
-export function runBacktest({ stockId, startDate, endDate, entryConditions, exitConditions, capital, stopLoss, takeProfit }) {
-  const bars = db.prepare(`
-    SELECT ts, open, high, low, close, volume
-    FROM price_history
-    WHERE stock_id = ? AND ts BETWEEN ? AND ? AND close IS NOT NULL
-    ORDER BY ts ASC
-  `).all(stockId, startDate, endDate);
+export async function runBacktest({ stockId, startDate, endDate, entryConditions, exitConditions, capital, stopLoss, takeProfit }) {
+  const { rows: bars } = await db.execute({
+    sql: `
+      SELECT ts, open, high, low, close, volume
+      FROM price_history
+      WHERE stock_id = ? AND ts BETWEEN ? AND ? AND close IS NOT NULL
+      ORDER BY ts ASC
+    `,
+    args: [stockId, startDate, endDate],
+  });
 
   if (bars.length < 2) return { error: 'Not enough historical data for this range.' };
 

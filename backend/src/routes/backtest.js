@@ -21,19 +21,25 @@ router.post('/', async (req, res) => {
 
   if (!symbol || !startDate) return res.status(400).json({ error: 'symbol and startDate required' });
 
-  const stock = db.prepare('SELECT id FROM stocks WHERE symbol = ?').get(symbol.toUpperCase());
+  const { rows: stockRows } = await db.execute({
+    sql: 'SELECT id FROM stocks WHERE symbol = ?',
+    args: [symbol.toUpperCase()],
+  });
+  const stock = stockRows[0];
   if (!stock) return res.status(404).json({ error: 'Stock not found' });
 
   // Ensure historical data exists; fetch if needed
-  const existingCount = db.prepare(
-    'SELECT COUNT(*) as n FROM price_history WHERE stock_id = ? AND ts >= ?'
-  ).get(stock.id, startDate).n;
+  const { rows: countRows } = await db.execute({
+    sql: 'SELECT COUNT(*) as n FROM price_history WHERE stock_id = ? AND ts >= ?',
+    args: [stock.id, startDate],
+  });
+  const existingCount = Number(countRows[0].n);
 
   if (existingCount < 5) {
     await fetchHistory(symbol.toUpperCase(), stock.id, startDate, endDate || new Date());
   }
 
-  const result = runBacktest({
+  const result = await runBacktest({
     stockId:         stock.id,
     startDate,
     endDate:         endDate || new Date().toISOString(),

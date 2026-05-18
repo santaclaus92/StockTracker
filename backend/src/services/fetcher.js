@@ -88,65 +88,36 @@ export async function yfHistory(symbol, from, to = new Date()) {
   })).filter((r) => r.close != null);
 }
 
-// ── DB prepared statements ─────────────────────────────────────────────────
-
-const upsertLatest = db.prepare(`
-  INSERT INTO latest_price
-    (stock_id, price, open, high, low, week52_high, week52_low, volume, pct_change, updated_at)
-  VALUES
-    (@stock_id, @price, @open, @high, @low, @week52_high, @week52_low, @volume, @pct_change, @updated_at)
-  ON CONFLICT(stock_id) DO UPDATE SET
-    price       = excluded.price,
-    open        = excluded.open,
-    high        = excluded.high,
-    low         = excluded.low,
-    week52_high = COALESCE(excluded.week52_high, latest_price.week52_high),
-    week52_low  = COALESCE(excluded.week52_low,  latest_price.week52_low),
-    volume      = excluded.volume,
-    pct_change  = excluded.pct_change,
-    updated_at  = excluded.updated_at
-`);
-
-const insertHistory = db.prepare(`
-  INSERT OR IGNORE INTO price_history (stock_id, ts, open, high, low, close, volume)
-  VALUES (@stock_id, @ts, @open, @high, @low, @close, @volume)
-`);
-
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export async function fetchStock(symbol, stockId) {
   try {
     const q = await yfQuote(symbol);
 
-    upsertLatest.run({
-      stock_id:    stockId,
-      price:       q.price,
-      open:        q.open,
-      high:        q.high,
-      low:         q.low,
-      week52_high: q.week52_high,
-      week52_low:  q.week52_low,
-      volume:      q.volume,
-      pct_change:  q.pct_change,
-      updated_at:  q.updated_at,
+    await db.execute({
+      sql: `INSERT INTO latest_price (stock_id, price, open, high, low, week52_high, week52_low, volume, pct_change, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(stock_id) DO UPDATE SET
+              price=excluded.price, open=excluded.open, high=excluded.high, low=excluded.low,
+              week52_high=COALESCE(excluded.week52_high, latest_price.week52_high),
+              week52_low=COALESCE(excluded.week52_low, latest_price.week52_low),
+              volume=excluded.volume, pct_change=excluded.pct_change, updated_at=excluded.updated_at`,
+      args: [stockId, q.price, q.open, q.high, q.low, q.week52_high, q.week52_low, q.volume, q.pct_change, q.updated_at],
     });
 
     if (q.price) {
-      insertHistory.run({
-        stock_id: stockId,
-        ts:       q.updated_at,
-        open:     q.open,
-        high:     q.high,
-        low:      q.low,
-        close:    q.price,
-        volume:   q.volume,
+      await db.execute({
+        sql: 'INSERT OR IGNORE INTO price_history (stock_id, ts, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        args: [stockId, q.updated_at, q.open, q.high, q.low, q.price, q.volume],
       });
     }
 
     // Update stock name if we got a better one
     if (q.name && q.name !== symbol) {
-      db.prepare('UPDATE stocks SET name = ? WHERE id = ? AND name = ?')
-        .run(q.name, stockId, symbol);
+      await db.execute({
+        sql: 'UPDATE stocks SET name = ? WHERE id = ? AND name = ?',
+        args: [q.name, stockId, symbol],
+      });
     }
 
     return q;
@@ -161,31 +132,26 @@ export async function fetchHistory(symbol, stockId, from, to = new Date()) {
     const rows = await yfHistory(symbol, from, to);
     if (!rows.length) return 0;
 
-    db.transaction(() => {
-      for (const r of rows) {
-        insertHistory.run({
-          stock_id: stockId,
-          ts:       r.date,
-          open:     r.open,
-          high:     r.high,
-          low:      r.low,
-          close:    r.close,
-          volume:   r.volume,
-        });
-      }
-    })();
+    await db.batch(
+      rows.map((r) => ({
+        sql: 'INSERT OR IGNORE INTO price_history (stock_id, ts, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        args: [stockId, r.date, r.open, r.high, r.low, r.close, r.volume],
+      })),
+      'write'
+    );
 
     // Recompute 52w high/low from stored history
-    const w52 = db.prepare(`
-      SELECT MAX(high) AS h52, MIN(low) AS l52
-      FROM price_history
-      WHERE stock_id = ? AND ts >= date('now', '-1 year') AND high IS NOT NULL
-    `).get(stockId);
+    const { rows: w52 } = await db.execute({
+      sql: `SELECT MAX(high) AS h52, MIN(low) AS l52 FROM price_history
+            WHERE stock_id = ? AND ts >= date('now', '-1 year') AND high IS NOT NULL`,
+      args: [stockId],
+    });
 
-    if (w52?.h52) {
-      db.prepare(`
-        UPDATE latest_price SET week52_high = ?, week52_low = ? WHERE stock_id = ?
-      `).run(w52.h52, w52.l52, stockId);
+    if (w52[0]?.h52) {
+      await db.execute({
+        sql: 'UPDATE latest_price SET week52_high = ?, week52_low = ? WHERE stock_id = ?',
+        args: [w52[0].h52, w52[0].l52, stockId],
+      });
     }
 
     return rows.length;
@@ -196,10 +162,10 @@ export async function fetchHistory(symbol, stockId, from, to = new Date()) {
 }
 
 export async function fetchFavourites() {
-  const favs = db.prepare(`
-    SELECT s.id, s.symbol FROM stocks s
-    JOIN favourites f ON f.stock_id = s.id
-  `).all();
+  const { rows: favs } = await db.execute({
+    sql: 'SELECT s.id, s.symbol FROM stocks s JOIN favourites f ON f.stock_id = s.id',
+    args: [],
+  });
 
   let ok = 0;
   for (const { id, symbol } of favs) {
@@ -211,7 +177,10 @@ export async function fetchFavourites() {
 }
 
 export async function fetchAll() {
-  const stocks = db.prepare('SELECT id, symbol FROM stocks').all();
+  const { rows: stocks } = await db.execute({
+    sql: 'SELECT id, symbol FROM stocks',
+    args: [],
+  });
   let ok = 0;
   for (const { id, symbol } of stocks) {
     const r = await fetchStock(symbol, id);

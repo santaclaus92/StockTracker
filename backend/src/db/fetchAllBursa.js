@@ -1,115 +1,114 @@
 /**
- * Fetches the complete list of Bursa Malaysia listed stocks.
+ * Imports all Bursa Malaysia stocks using Yahoo Finance spark endpoint.
+ * Strategy: send batches of 20 symbols (Yahoo drops non-existent ones silently).
+ * Keeps batches small so valid symbols aren't lost in URL-length truncation.
  *
- * Run once:  node src/db/fetchAllBursa.js
- *
- * Strategy:
- *  1. Yahoo Finance custom screener filtered to exchange=KLS (Bursa Main + ACE),
- *     paginated 250 at a time until exhausted
- *  2. Validate + upsert all .KL / .KLS symbols into the stocks table
+ * Run: node src/db/fetchAllBursa.js
  */
 
-import yahooFinance from 'yahoo-finance2';
-import Database from 'better-sqlite3';
-import { DB_PATH } from '../config.js';
-
-const db = new Database(DB_PATH);
-db.pragma('foreign_keys = ON');
-
-const upsert = db.prepare(`
-  INSERT INTO stocks (symbol, name, sector, market)
-  VALUES (@symbol, @name, @sector, @market)
-  ON CONFLICT(symbol) DO UPDATE SET
-    name   = CASE WHEN excluded.name != '' THEN excluded.name ELSE stocks.name END,
-    sector = CASE WHEN excluded.sector IS NOT NULL THEN excluded.sector ELSE stocks.sector END,
-    market = CASE WHEN excluded.market IS NOT NULL THEN excluded.market ELSE stocks.market END
-`);
+import db from '../db/database.js';
+import { BURSA_STOCKS } from '../data/bursaStocks.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function isKLSymbol(s) {
-  return typeof s === 'string' && (s.endsWith('.KL') || s.endsWith('.KLS'));
+const YF_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept':     'application/json',
+};
+
+async function fetchSpark(symbols) {
+  const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${symbols.join(',')}&range=1d&interval=1d`;
+  try {
+    const res  = await fetch(url, { headers: YF_HEADERS });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json?.spark?.result ?? [];
+  } catch { return []; }
 }
 
-function toRow(q) {
+function isBursa(ex) { return ex === 'KLS' || ex === 'KLX'; }
+
+function toRow(item) {
+  const meta = item.response?.[0]?.meta ?? {};
   return {
-    symbol: q.symbol,
-    name:   q.longName || q.shortName || q.symbol,
-    sector: q.sector   || q.industry  || null,
-    market: q.exchange === 'KLS' ? 'ACE' : 'MAIN',
+    symbol: item.symbol,
+    name:   meta.longName || meta.shortName || item.symbol,
+    sector: null,
+    market: meta.exchangeName === 'KLX' ? 'ACE' : 'MAIN',
   };
 }
 
-// Fetch one page of Bursa stocks via the custom screener query
-async function fetchPage(offset, count = 250) {
-  try {
-    const result = await yahooFinance.screener(
-      {
-        query: {
-          operator: 'or',
-          operands: [
-            { operator: 'eq', operands: ['exchange', 'KLS'] },
-            { operator: 'eq', operands: ['exchange', 'KLX'] },
-          ],
-        },
-        region:       'MY',
-        lang:         'en-US',
-        count,
-        offset,
-        sortField:    'intradaymarketcap',
-        sortType:     'DESC',
-        corsDomain:   'finance.yahoo.com',
-        formatted:    false,
-      },
-      { validateResult: false }
+async function upsertAll(stocks) {
+  const rows  = [...stocks.values()];
+  const CHUNK = 100;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    await db.batch(
+      rows.slice(i, i + CHUNK).map((r) => ({
+        sql: `INSERT INTO stocks (symbol, name, sector, market)
+              VALUES (?, ?, ?, ?)
+              ON CONFLICT(symbol) DO UPDATE SET
+                name   = CASE WHEN excluded.name != '' THEN excluded.name ELSE stocks.name END,
+                sector = CASE WHEN excluded.sector IS NOT NULL THEN excluded.sector ELSE stocks.sector END,
+                market = CASE WHEN excluded.market IS NOT NULL THEN excluded.market ELSE stocks.market END`,
+        args: [r.symbol, r.name, r.sector, r.market],
+      })),
+      'write'
     );
-    return result?.quotes ?? [];
-  } catch (err) {
-    console.warn(`  [page offset=${offset}] error:`, err.message);
-    return [];
+    process.stdout.write(`\r  Saved ${Math.min(i + CHUNK, rows.length)}/${rows.length}…`);
   }
+  console.log('');
 }
 
 async function main() {
+  console.log('\n=== Bursa Malaysia → Turso (spark scan) ===\n');
+
+  // Generate all 4-digit candidates
+  const allSymbols = [];
+  for (let i = 1; i <= 9999; i++) allSymbols.push(String(i).padStart(4, '0') + '.KL');
+
+  // Small batches — Yahoo silently drops invalid symbols, large batches may get truncated
+  const BATCH      = 20;
   const discovered = new Map();
+  const total      = allSymbols.length;
 
-  console.log('Fetching all Bursa Malaysia stocks from Yahoo Finance screener…\n');
+  console.log(`Scanning ${total} candidates in batches of ${BATCH}…\n`);
 
-  let offset = 0;
-  const PAGE  = 250;
+  for (let i = 0; i < total; i += BATCH) {
+    const batch   = allSymbols.slice(i, i + BATCH);
+    const results = await fetchSpark(batch);
 
-  while (true) {
-    process.stdout.write(`  offset=${offset} … `);
-    const quotes = await fetchPage(offset, PAGE);
-
-    const klQuotes = quotes.filter((q) => isKLSymbol(q.symbol));
-    for (const q of klQuotes) {
-      if (!discovered.has(q.symbol)) discovered.set(q.symbol, toRow(q));
+    for (const item of results) {
+      const meta = item.response?.[0]?.meta ?? {};
+      if (isBursa(meta.exchangeName) && !discovered.has(item.symbol)) {
+        discovered.set(item.symbol, toRow(item));
+      }
     }
 
-    console.log(`got ${quotes.length} (${klQuotes.length} Bursa) — total: ${discovered.size}`);
+    const pct = Math.min(100, ((i + BATCH) / total * 100)).toFixed(0);
+    process.stdout.write(`\r  [${pct}%] scanned ${Math.min(i + BATCH, total)}/${total} — found ${discovered.size} stocks`);
 
-    // Stop when Yahoo returns fewer than a full page
-    if (quotes.length < PAGE) break;
-    offset += PAGE;
-    await sleep(600);
+    await sleep(150);
   }
 
-  if (discovered.size === 0) {
-    console.log('\nScreener returned 0 Bursa stocks — Yahoo Finance may have changed the API.');
-    console.log('Falling back to seed list only. Run: npm run seed');
-    db.close();
-    return;
+  console.log(`\n\nDiscovered ${discovered.size} valid Bursa stocks.\n`);
+
+  // Merge static list — fills in sector info + catches anything spark missed
+  let added = 0;
+  for (const [symbol, name, sector] of BURSA_STOCKS) {
+    if (!discovered.has(symbol)) {
+      discovered.set(symbol, { symbol, name, sector: sector || null, market: 'MAIN' });
+      added++;
+    } else {
+      discovered.get(symbol).sector = sector || null;
+    }
   }
+  if (added) console.log(`Added ${added} from static list.`);
 
-  console.log(`\nUpserting ${discovered.size} stocks…`);
-  db.transaction(() => {
-    for (const row of discovered.values()) upsert.run(row);
-  })();
+  console.log(`Upserting ${discovered.size} stocks into Turso…`);
+  await upsertAll(discovered);
 
-  const total = db.prepare('SELECT COUNT(*) as n FROM stocks').get().n;
-  console.log(`Done. Total stocks in DB: ${total}`);
-  db.close();
+  const { rows } = await db.execute('SELECT COUNT(*) AS n FROM stocks');
+  console.log(`\nDone ✓  Total stocks in Turso: ${rows[0].n}`);
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });
