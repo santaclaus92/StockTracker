@@ -24,3 +24,6 @@ export const dismissAlert   = (id) => api.post(`/alerts/${id}/dismiss`).then((r)
 export const dismissAll     = () => api.post('/alerts/dismiss-all').then((r) => r.data);
 
 export const runBacktest = (body) => api.post('/backtest', body).then((r) => r.data);
+
+export const getChart    = (symbol, params) => api.get(`/stocks/${symbol}/chart`, { params }).then((r) => r.data);
+export const searchStocks = (q) => api.get('/stocks', { params: { search: q, limit: 10 } }).then((r) => r.data.data);

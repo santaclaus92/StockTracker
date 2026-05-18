@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Navbar from './components/Navbar.jsx';
 import MarketOverview from './pages/MarketOverview.jsx';
 import Favourites from './pages/Favourites.jsx';
+import Analysis from './pages/Analysis.jsx';
 import Backtest from './pages/Backtest.jsx';
 
 export default function App() {
@@ -12,6 +13,7 @@ export default function App() {
         <Routes>
           <Route path="/"           element={<MarketOverview />} />
           <Route path="/favourites" element={<Favourites />} />
+          <Route path="/analysis"   element={<Analysis />} />
           <Route path="/backtest"   element={<Backtest />} />
           <Route path="*"           element={<Navigate to="/" />} />
         </Routes>
