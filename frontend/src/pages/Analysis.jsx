@@ -17,8 +17,8 @@ const C = {
   sma20:     '#e3b341',
   sma50:     '#58a6ff',
   ema20:     '#bc8cff',
-  bbUpper:   '#388bfd55',
-  bbLower:   '#388bfd55',
+  bbUpper:   '#388bfd50',
+  bbLower:   '#388bfd50',
   bbMid:     '#388bfd88',
   macdLine:  '#58a6ff',
   macdSig:   '#f0883e',
@@ -96,10 +96,11 @@ const fmtV = (v)        => v != null ? Number(v).toLocaleString() : '—';
 // ── Analysis page ──────────────────────────────────────────────────────────
 export default function Analysis() {
   // ── Autocomplete state
-  const [input,       setInput]       = useState('');
-  const [suggestions, setSuggestions] = useState([]);
-  const [showDrop,    setShowDrop]    = useState(false);
-  const [activeIdx,   setActiveIdx]   = useState(-1);
+  const [input,          setInput]          = useState('');
+  const [selectedSymbol, setSelectedSymbol] = useState(''); // actual symbol code after picking
+  const [suggestions,    setSuggestions]    = useState([]);
+  const [showDrop,       setShowDrop]       = useState(false);
+  const [activeIdx,      setActiveIdx]      = useState(-1);
   const inputRef    = useRef(null);
   const dropRef     = useRef(null);
   const debounceRef = useRef(null);
@@ -128,6 +129,7 @@ export default function Analysis() {
   // ── Autocomplete handlers
   const handleInputChange = (val) => {
     setInput(val);
+    setSelectedSymbol(''); // clear pinned symbol when user types manually
     setActiveIdx(-1);
     clearTimeout(debounceRef.current);
     if (val.trim().length < 1) { setSuggestions([]); setShowDrop(false); return; }
@@ -142,7 +144,8 @@ export default function Analysis() {
 
   const pickSuggestion = useCallback((s) => {
     const sym = s.symbol.toUpperCase();
-    setInput(sym);
+    setInput(s.name);          // show display name (e.g. "Maybank") in the box
+    setSelectedSymbol(sym);    // remember the actual symbol for the API call
     setSuggestions([]);
     setShowDrop(false);
     setActiveIdx(-1);
@@ -340,7 +343,12 @@ export default function Analysis() {
     };
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleLoad = () => setQueried({ symbol: input.trim().toUpperCase(), interval, days });
+  // Use pinned symbol if user picked from dropdown; else treat typed text as symbol code
+  const handleLoad = () => {
+    const sym = selectedSymbol || input.trim().toUpperCase();
+    if (!sym) return;
+    setQueried({ symbol: sym, interval, days });
+  };
   const s = data?.summary;
 
   return (
@@ -385,7 +393,7 @@ export default function Analysis() {
           <select value={interval} onChange={(e) => {
               const v = e.target.value;
               setInterval(v);
-              if (v === '15m') setDays((d) => Math.min(d, 55));
+              if (v === '15m') setDays((d) => Math.min(d, 50));
               if (v === '1h')  setDays((d) => Math.min(d, 730));
             }}
             className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
@@ -410,7 +418,7 @@ export default function Analysis() {
           </label>
           <input
             type="range" min={7}
-            max={interval === '15m' ? 55 : interval === '1h' ? 730 : 1825}
+            max={interval === '15m' ? 50 : interval === '1h' ? 730 : 1825}
             step={1} value={days}
             onChange={(e) => setDays(Number(e.target.value))}
             className="w-full accent-blue-500 cursor-pointer"
@@ -418,7 +426,7 @@ export default function Analysis() {
           <div className="flex justify-between text-[10px] text-gray-600 select-none">
             <span>7d</span>
             {interval === '15m'
-              ? <><span>2w</span><span>1m</span><span>6w</span><span>55d</span></>
+              ? <><span>2w</span><span>1m</span><span>6w</span><span>50d</span></>
               : interval === '1h'
               ? <><span>3m</span><span>6m</span><span>1y</span><span>2y</span></>
               : <><span>6m</span><span>1y</span><span>2y</span><span>5y</span></>}
