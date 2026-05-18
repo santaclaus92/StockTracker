@@ -2,7 +2,7 @@ import nodemailer from 'nodemailer';
 import TelegramBot from 'node-telegram-bot-api';
 import db from '../db/database.js';
 import { SMTP, TELEGRAM } from '../config.js';
-import { evaluateCondition, computeRSI } from './indicators.js';
+import { evaluateCondition } from './indicators.js';
 
 let mailer = null;
 let tgBot  = null;
@@ -29,36 +29,30 @@ async function sendTelegram(text) {
 }
 
 export async function evaluateAllConditions() {
-  const { rows: favs } = await db.execute({
-    sql: `
-      SELECT s.id, s.symbol, s.name,
-             lp.price, lp.pct_change, lp.week52_high, lp.week52_low
-      FROM stocks s
-      JOIN favourites f ON f.stock_id = s.id
-      LEFT JOIN latest_price lp ON lp.stock_id = s.id
-      WHERE lp.price IS NOT NULL
-    `,
-    args: [],
-  });
+  const favsRes = await db.execute(`
+    SELECT s.id, s.symbol, s.name,
+           lp.price, lp.pct_change, lp.week52_high, lp.week52_low
+    FROM stocks s
+    JOIN favourites f ON f.stock_id = s.id
+    LEFT JOIN latest_price lp ON lp.stock_id = s.id
+    WHERE lp.price IS NOT NULL
+  `);
 
-  for (const stock of favs) {
-    const { rows: conditions } = await db.execute({
-      sql: 'SELECT * FROM conditions WHERE stock_id = ? AND active = 1',
+  for (const stock of favsRes.rows) {
+    const condsRes = await db.execute({
+      sql:  'SELECT * FROM conditions WHERE stock_id = ? AND active = 1',
       args: [stock.id],
     });
-
+    const conditions = condsRes.rows;
     if (!conditions.length) continue;
 
-    // Pull closes for indicator calculations (last 60 bars)
-    const { rows: closeRows } = await db.execute({
-      sql: `
-        SELECT close FROM price_history
-        WHERE stock_id = ? AND close IS NOT NULL
-        ORDER BY ts DESC LIMIT 60
-      `,
+    const closesRes = await db.execute({
+      sql:  `SELECT close FROM price_history
+             WHERE stock_id = ? AND close IS NOT NULL
+             ORDER BY ts DESC LIMIT 60`,
       args: [stock.id],
     });
-    const closes = closeRows.map((r) => r.close).reverse();
+    const closes = closesRes.rows.map((r) => r.close).reverse();
 
     for (const cond of conditions) {
       const { triggered, message } = evaluateCondition(cond, stock, closes);
@@ -67,7 +61,7 @@ export async function evaluateAllConditions() {
       const msg = `[${stock.symbol}] ${stock.name}: ${message}`;
 
       await db.execute({
-        sql: 'INSERT INTO alerts_log (condition_id, stock_id, message, price_at) VALUES (?, ?, ?, ?)',
+        sql:  `INSERT INTO alerts_log (condition_id, stock_id, message, price_at) VALUES (?, ?, ?, ?)`,
         args: [cond.id, stock.id, msg, stock.price],
       });
 

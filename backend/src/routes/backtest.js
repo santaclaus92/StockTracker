@@ -6,7 +6,6 @@ import { fetchHistory } from '../services/fetcher.js';
 const router = Router();
 
 // POST /api/backtest
-// Body: { symbol, startDate, endDate, entryConditions, exitConditions, capital, stopLoss, takeProfit }
 router.post('/', async (req, res) => {
   const {
     symbol,
@@ -21,36 +20,37 @@ router.post('/', async (req, res) => {
 
   if (!symbol || !startDate) return res.status(400).json({ error: 'symbol and startDate required' });
 
-  const { rows: stockRows } = await db.execute({
-    sql: 'SELECT id FROM stocks WHERE symbol = ?',
-    args: [symbol.toUpperCase()],
-  });
-  const stock = stockRows[0];
-  if (!stock) return res.status(404).json({ error: 'Stock not found' });
+  try {
+    const stockRes = await db.execute({
+      sql:  'SELECT id FROM stocks WHERE symbol = ?',
+      args: [symbol.toUpperCase()],
+    });
+    const stock = stockRes.rows[0];
+    if (!stock) return res.status(404).json({ error: 'Stock not found' });
 
-  // Ensure historical data exists; fetch if needed
-  const { rows: countRows } = await db.execute({
-    sql: 'SELECT COUNT(*) as n FROM price_history WHERE stock_id = ? AND ts >= ?',
-    args: [stock.id, startDate],
-  });
-  const existingCount = Number(countRows[0].n);
+    const countRes = await db.execute({
+      sql:  'SELECT COUNT(*) as n FROM price_history WHERE stock_id = ? AND ts >= ?',
+      args: [stock.id, startDate],
+    });
+    if (Number(countRes.rows[0].n) < 5) {
+      await fetchHistory(symbol.toUpperCase(), stock.id, startDate, endDate || new Date());
+    }
 
-  if (existingCount < 5) {
-    await fetchHistory(symbol.toUpperCase(), stock.id, startDate, endDate || new Date());
+    const result = await runBacktest({
+      stockId:         stock.id,
+      startDate,
+      endDate:         endDate || new Date().toISOString(),
+      entryConditions,
+      exitConditions,
+      capital:         parseFloat(capital),
+      stopLoss:        stopLoss   != null ? parseFloat(stopLoss)   : null,
+      takeProfit:      takeProfit != null ? parseFloat(takeProfit) : null,
+    });
+
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-
-  const result = await runBacktest({
-    stockId:         stock.id,
-    startDate,
-    endDate:         endDate || new Date().toISOString(),
-    entryConditions,
-    exitConditions,
-    capital:         parseFloat(capital),
-    stopLoss:        stopLoss  != null ? parseFloat(stopLoss)  : null,
-    takeProfit:      takeProfit != null ? parseFloat(takeProfit) : null,
-  });
-
-  res.json(result);
 });
 
 export default router;

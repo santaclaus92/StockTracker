@@ -3,7 +3,6 @@ import axios from 'axios';
 const api = axios.create({ baseURL: '/api' });
 
 export const getStocks       = (params) => api.get('/stocks', { params }).then((r) => r.data);
-export const searchStocks    = (q)      => api.get('/stocks', { params: { search: q, limit: 10 } }).then((r) => r.data.data);
 export const getStock        = (symbol) => api.get(`/stocks/${symbol}`).then((r) => r.data);
 export const getStockHistory = (symbol, params) => api.get(`/stocks/${symbol}/history`, { params }).then((r) => r.data);
 export const getSectors      = () => api.get('/stocks/sectors').then((r) => r.data);
@@ -25,5 +24,3 @@ export const dismissAlert   = (id) => api.post(`/alerts/${id}/dismiss`).then((r)
 export const dismissAll     = () => api.post('/alerts/dismiss-all').then((r) => r.data);
 
 export const runBacktest = (body) => api.post('/backtest', body).then((r) => r.data);
-
-export const getChart = (symbol, params) => api.get(`/chart/${symbol}`, { params }).then((r) => r.data);

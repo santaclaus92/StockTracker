@@ -24,7 +24,7 @@ export default function Navbar() {
       </span>
 
       <div className="flex gap-4 flex-1">
-        {[['/', 'Market'], ['/favourites', 'Favourites'], ['/analysis', 'Analysis'], ['/backtest', 'Backtest']].map(([to, label]) => (
+        {[['/', 'Market'], ['/favourites', 'Favourites'], ['/backtest', 'Backtest']].map(([to, label]) => (
           <NavLink
             key={to}
             to={to}

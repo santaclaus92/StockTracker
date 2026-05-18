@@ -1,61 +1,40 @@
 import db from '../db/database.js';
 import { computeRSI, computeMACD } from './indicators.js';
 
-// Evaluate a condition on a historical snapshot
 function evalCondition(cond, bar, closes) {
   const { type, threshold } = cond;
-
   switch (type) {
     case 'price_above':       return bar.close > threshold;
     case 'price_below':       return bar.close < threshold;
     case 'pct_change_above':  return bar.pct_change > threshold;
     case 'pct_change_below':  return bar.pct_change < threshold;
-    case 'rsi_above': {
-      const rsi = computeRSI(closes);
-      return rsi !== null && rsi > threshold;
-    }
-    case 'rsi_below': {
-      const rsi = computeRSI(closes);
-      return rsi !== null && rsi < threshold;
-    }
-    case 'macd_crossover': {
-      const m = computeMACD(closes);
-      return m !== null && m.MACD > m.signal;
-    }
-    case 'macd_crossunder': {
-      const m = computeMACD(closes);
-      return m !== null && m.MACD < m.signal;
-    }
-    case '52w_high':
-      return bar.close >= bar.rolling_high;
-    case '52w_low':
-      return bar.close <= bar.rolling_low;
-    default:
-      return false;
+    case 'rsi_above': { const rsi = computeRSI(closes); return rsi !== null && rsi > threshold; }
+    case 'rsi_below': { const rsi = computeRSI(closes); return rsi !== null && rsi < threshold; }
+    case 'macd_crossover':  { const m = computeMACD(closes); return m !== null && m.MACD > m.signal; }
+    case 'macd_crossunder': { const m = computeMACD(closes); return m !== null && m.MACD < m.signal; }
+    case '52w_high': return bar.close >= bar.rolling_high;
+    case '52w_low':  return bar.close <= bar.rolling_low;
+    default: return false;
   }
 }
 
 function applyLogic(results, logic) {
   if (!results.length) return false;
-  return logic === 'OR'
-    ? results.some(Boolean)
-    : results.every(Boolean);
+  return logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
 }
 
 export async function runBacktest({ stockId, startDate, endDate, entryConditions, exitConditions, capital, stopLoss, takeProfit }) {
-  const { rows: bars } = await db.execute({
-    sql: `
-      SELECT ts, open, high, low, close, volume
-      FROM price_history
-      WHERE stock_id = ? AND ts BETWEEN ? AND ? AND close IS NOT NULL
-      ORDER BY ts ASC
-    `,
+  const result = await db.execute({
+    sql:  `SELECT ts, open, high, low, close, volume
+           FROM price_history
+           WHERE stock_id = ? AND ts BETWEEN ? AND ? AND close IS NOT NULL
+           ORDER BY ts ASC`,
     args: [stockId, startDate, endDate],
   });
+  const bars = result.rows;
 
   if (bars.length < 2) return { error: 'Not enough historical data for this range.' };
 
-  // Pre-compute % change
   for (let i = 0; i < bars.length; i++) {
     bars[i].pct_change = i === 0 ? 0 : ((bars[i].close - bars[i - 1].close) / bars[i - 1].close) * 100;
   }
@@ -63,7 +42,7 @@ export async function runBacktest({ stockId, startDate, endDate, entryConditions
   const equity = [{ date: bars[0].ts, value: capital }];
   const trades = [];
   let cash = capital;
-  let position = null; // { shares, entryPrice, entryDate }
+  let position = null;
   let peakEquity = capital;
   let maxDrawdown = 0;
 
@@ -76,25 +55,17 @@ export async function runBacktest({ stockId, startDate, endDate, entryConditions
     maxDrawdown = Math.max(maxDrawdown, (peakEquity - current) / peakEquity);
 
     if (!position) {
-      // Check entry
       const entryLogic  = entryConditions[0]?.logic || 'AND';
-      const entrySignal = applyLogic(
-        entryConditions.map((c) => evalCondition(c, bar, closes)),
-        entryLogic
-      );
-
+      const entrySignal = applyLogic(entryConditions.map((c) => evalCondition(c, bar, closes)), entryLogic);
       if (entrySignal && cash > 0) {
-        const shares       = Math.floor(cash / bar.close);
-        position           = { shares, entryPrice: bar.close, entryDate: bar.ts };
-        cash              -= shares * bar.close;
+        const shares = Math.floor(cash / bar.close);
+        position     = { shares, entryPrice: bar.close, entryDate: bar.ts };
+        cash        -= shares * bar.close;
       }
     } else {
-      // Check stop-loss / take-profit
       const pnlPct = ((bar.close - position.entryPrice) / position.entryPrice) * 100;
       const slHit  = stopLoss   != null && pnlPct <= -Math.abs(stopLoss);
-      const tpHit  = takeProfit != null && pnlPct >= Math.abs(takeProfit);
-
-      // Check exit condition
+      const tpHit  = takeProfit != null && pnlPct >=  Math.abs(takeProfit);
       const exitLogic   = exitConditions[0]?.logic || 'AND';
       const exitSignal  = exitConditions.length > 0
         ? applyLogic(exitConditions.map((c) => evalCondition(c, bar, closes)), exitLogic)
@@ -102,7 +73,7 @@ export async function runBacktest({ stockId, startDate, endDate, entryConditions
 
       if (slHit || tpHit || exitSignal) {
         const proceeds = position.shares * bar.close;
-        cash          += proceeds;
+        cash += proceeds;
         trades.push({
           entryDate:  position.entryDate,
           exitDate:   bar.ts,
@@ -120,11 +91,10 @@ export async function runBacktest({ stockId, startDate, endDate, entryConditions
     equity.push({ date: bar.ts, value: current });
   }
 
-  // Force-close any open position at last bar
   if (position) {
     const last     = bars[bars.length - 1];
     const proceeds = position.shares * last.close;
-    cash          += proceeds;
+    cash += proceeds;
     trades.push({
       entryDate:  position.entryDate,
       exitDate:   last.ts,
@@ -151,7 +121,7 @@ export async function runBacktest({ stockId, startDate, endDate, entryConditions
       numTrades:    trades.length,
       winRate:      trades.length ? (wins.length / trades.length) * 100 : 0,
       maxDrawdown:  maxDrawdown * 100,
-      avgWin:       wins.length  ? wins.reduce((s, t)   => s + t.pnl, 0) / wins.length   : 0,
+      avgWin:       wins.length   ? wins.reduce((s, t)   => s + t.pnl, 0) / wins.length   : 0,
       avgLoss:      losses.length ? losses.reduce((s, t) => s + t.pnl, 0) / losses.length : 0,
     },
     trades,

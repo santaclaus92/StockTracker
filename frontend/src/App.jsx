@@ -3,7 +3,6 @@ import Navbar from './components/Navbar.jsx';
 import MarketOverview from './pages/MarketOverview.jsx';
 import Favourites from './pages/Favourites.jsx';
 import Backtest from './pages/Backtest.jsx';
-import Analysis from './pages/Analysis.jsx';
 
 export default function App() {
   return (
@@ -14,7 +13,6 @@ export default function App() {
           <Route path="/"           element={<MarketOverview />} />
           <Route path="/favourites" element={<Favourites />} />
           <Route path="/backtest"   element={<Backtest />} />
-          <Route path="/analysis"   element={<Analysis />} />
           <Route path="*"           element={<Navigate to="/" />} />
         </Routes>
       </main>
