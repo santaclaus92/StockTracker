@@ -4,7 +4,8 @@
   "buildCommand": "npm run build --prefix frontend",
   "outputDirectory": "frontend/dist",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api" }
+    { "source": "/api/:path*", "destination": "/api" },
+    { "source": "/(.*)",       "destination": "/index.html" }
   ],
   "crons": [
     { "path": "/api/cron/refresh", "schedule": "0 1 * * *" }

@@ -149,8 +149,8 @@ export default function Analysis() {
     setSuggestions([]);
     setShowDrop(false);
     setActiveIdx(-1);
-    // Load chart immediately when a counter is selected
-    setQueried((prev) => ({ symbol: sym, interval: prev?.interval ?? interval, days: prev?.days ?? days }));
+    // Load chart immediately — always use the current interval/days from the closure
+    setQueried({ symbol: sym, interval, days });
   }, [interval, days]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleKeyDown = (e) => {
