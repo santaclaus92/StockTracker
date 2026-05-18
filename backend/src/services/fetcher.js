@@ -6,36 +6,53 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // yahoo-finance2 v2.14+ requires instantiation
 const yf = new yahooFinance();
 
+// More complete browser headers to avoid Yahoo Finance bot detection on cloud IPs
 const YF_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'application/json',
+  'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept':          'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Referer':         'https://finance.yahoo.com/',
+  'Origin':          'https://finance.yahoo.com',
 };
 
-// Fetch OHLCV history via Yahoo Finance chart API (replaces yahooFinance.historical)
+// Parse a raw Yahoo Finance chart API response into OHLCV rows
+function parseYfChart(json) {
+  const result = json?.chart?.result?.[0];
+  if (!result) return [];
+  const timestamps = result.timestamp ?? [];
+  const q = result.indicators?.quote?.[0] ?? {};
+  return timestamps.map((ts, i) => ({
+    date:   new Date(ts * 1000),
+    open:   q.open?.[i]   ?? null,
+    high:   q.high?.[i]   ?? null,
+    low:    q.low?.[i]    ?? null,
+    close:  q.close?.[i]  ?? null,
+    volume: q.volume?.[i] ?? null,
+  })).filter((r) => r.close != null);
+}
+
+// Fetch OHLCV history — tries query2 then query1 as fallback
 async function yfChartHistory(symbol, period1, period2, interval = '1d') {
   const p1 = Math.floor(new Date(period1).getTime() / 1000);
   const p2 = Math.floor(new Date(period2).getTime() / 1000);
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${p1}&period2=${p2}&interval=${interval}&events=history`;
-  try {
-    const res  = await fetch(url, { headers: YF_HEADERS });
-    if (!res.ok) { console.warn(`[history] ${symbol}: HTTP ${res.status}`); return []; }
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return [];
-    const timestamps = result.timestamp ?? [];
-    const q = result.indicators?.quote?.[0] ?? {};
-    return timestamps.map((ts, i) => ({
-      date:   new Date(ts * 1000),
-      open:   q.open?.[i]   ?? null,
-      high:   q.high?.[i]   ?? null,
-      low:    q.low?.[i]    ?? null,
-      close:  q.close?.[i]  ?? null,
-      volume: q.volume?.[i] ?? null,
-    })).filter((r) => r.close != null);
-  } catch (err) {
-    console.warn(`[history] ${symbol}:`, err.message);
-    return [];
+  const qs  = `period1=${p1}&period2=${p2}&interval=${interval}&events=history&includePrePost=false`;
+  const urls = [
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${qs}`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${qs}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { headers: YF_HEADERS, signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) { console.warn(`[history] ${symbol}: HTTP ${res.status} from ${url}`); continue; }
+      const json = await res.json();
+      const rows = parseYfChart(json);
+      if (rows.length) return rows;
+    } catch (err) {
+      console.warn(`[history] ${symbol}: ${err.message}`);
+    }
   }
+  return [];
 }
 
 async function upsertLatest(stockId, quote) {
